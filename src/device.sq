@@ -1,0 +1,419 @@
+local	_buffer = null
+BRIGHTNESS_NORM <- 2
+BRIGHTNESS_MAX <- 15
+UPDATE_SEC <- 30
+DOT_INTERVAL <- 10
+notfnord <- "FFMS"
+fnords <- ["TELL THE TRUTH AND RUN.",
+            "ARE YOU SURE",  //?
+            "WHY NOT A GOAT", //?
+            "THIS IS A TEST.  THIS IS ONLY A TEST.   HAD THIS BEEN A REAL EMERGENCY YOU WOULD ALL BE DEAD BY NOW",
+            "AS SEEN ON TV",
+            "WARPZONE",
+            "MAKE ME A TABLE, A FUNKY TABLE!",
+            "WE ARE BORG. RESISTANCE IS VOLTAGE/CURRENT"] 
+
+fnordrate <- 0.02
+DISPLAY_FLIP_SEC <-3
+
+clientsTxt <-"XXXX"
+nodesTxt <-"XXXX"
+displayNodes <- false
+
+        
+class HT16K33QUAD
+{
+	// Squirrel class for 0.54-inch four-digit, 14-segment LED displays driven by the HT16K33 controller
+	// For example: http://shop.pimoroni.com/products/quad-alphanumeric-display-0-54-digits-w-i2c-backpack
+	// and: http://www.adafruit.com/product/1912
+	// Communicates with any imp I2C bus
+ 
+	// Written by Tony Smith (@smittytone) August/September 2014
+	// Version 1.0
+ 
+	// HT16K33 registers and HT16K33-specific variables
+    
+	 HT16K33_REGISTER_DISPLAY_ON  = "\x81"
+	 HT16K33_REGISTER_DISPLAY_OFF = "\x80"
+	 HT16K33_REGISTER_SYSTEM_ON   = "\x21"
+	 HT16K33_REGISTER_SYSTEM_OFF  = "\x20"
+	 HT16K33_DISPLAY_ADDRESS      = "\x00"
+	 HT16K33_I2C_ADDRESS = 0x70
+	 HT16K33_BLANK_CHAR = 62
+	 HT16K33_MINUS_CHAR = 17
+	 HT16K33_CHAR_COUNT = 77
+	 HT16K33_DP_VALUE = 0x4000
+    
+	// Class properties; null for those defined in the Constructor
+    
+	_digits = null
+	_led = null
+	_led_i2c_address = 0
+     
+	constructor(impI2CBus, ht16k33Address = 0x70)
+	{
+		// The parameter is whichever imp I2C bus is to be used for the HT16K33
+        
+		_led = impI2CBus
+		_led_i2c_address = ht16k33Address << 1
+        
+		// Buffer stores the character matrix values for each row of the display
+		// Quad LED has 16-bit values. There are four individual characters per display
+        
+		_buffer = [0x0000, 0x0000, 0x0000, 0x0000]
+        
+		// digits store character matrices for 0-9, A-F, a-z, space and various symbols
+        
+		_digits = [
+		    0x003F, 0x1200, 0x00DB, 0x008F, 0x12E0, 0x00ED, 0x00FD, 0x0C01, 0x00FF, 0x00EF, // 0-9
+		    0x00F7, 0x128F, 0x0039, 0x120F, 0x0079, 0x0071, // A-F
+		    0x00BD, 0x00F6, 0x1200, 0x001E, 0x2470, 0x0038, 0x0536, 0x2136, 0x003F, 0x00F3, // G-P
+		    0x203F, 0x20F3, 0x00ED, 0x1201, 0x003E, 0x0C30, 0x2836, 0x2D00, 0x1500, 0x0C09, // Q-Z
+			0x1058, 0x2078, 0x00D8, 0x088E, 0x0858, 0x0C80, 0x048E, 0x1070, 0x1000, 0x000E, // a-j
+			0x3600, 0x0030, 0x10D4, 0x1050, 0x00DC, 0x0170, 0x0486, 0x0050, 0x2088, 0x0078, // k-t
+			0x001C, 0x2004, 0x2814, 0x28C0, 0x200C, 0x0848, // u-z
+			0x0000, // blank
+			0x0006, 0x0220, 0x12CE, 0x12ED, 0x0C24, 0x235D, 0x0400, 0x2400, 0x0900, 0x3FC0, 
+            0x12C0, 0x0800, 0x00C0, 0x0000, 0x0C00 // Symbols
+			]
+	}
+    
+	function init(clearCharacter = 62, brightness = 15)
+	{
+		// Initialises the display
+		// 
+		// Parameters:
+		// 1. Integer index for the _digits[] character matrix to zero the display to; default: space
+		// 2. Integer value for the display brightness, between 0 and 15; default: 15
+        
+		// Configure the I2C bus
+        
+		_led.configure(CLOCK_SPEED_100_KHZ)
+        
+        // Clear the character buffer
+        
+		clearBuffer(clearCharacter)
+		
+		// Set the brightness (which also wipes and power cyles the display)
+        
+		setBrightness(brightness)
+	}
+    
+	function clearBuffer(clearCharacter = 62)
+	{
+		// Fills the buffer with a blank character, or the digits[] character matrix whose index is provided
+		//  
+        // Parameter:
+		// 1. Integer index for the _digits[] character matrix to zero the display to; default: space
+		
+		if (clearCharacter < 0 || clearCharacter > HT16K33_CHAR_COUNT) clearCharacter = HT16K33_BLANK_CHAR
+        
+		_buffer[0] = _digits[clearCharacter]
+		_buffer[1] = _digits[clearCharacter]
+		_buffer[2] = _digits[clearCharacter]
+		_buffer[3] = _digits[clearCharacter]
+	}
+    
+  
+    
+	function writeChar(rowNumber = 0, charValue = 0xFFFF, hasDot = false)
+	{
+		// Puts the input character matrix (a 16-bit integer) into the specified row,
+		// adding a decimal point if required. Character matrix value is calculated by
+		// setting the bit(s) representing the segment(s) you want illuminated:
+		//
+		//	    0			    9
+		//	    _
+		//	5 |   | 1		8 \ | / 10
+		//	  |   |			   \|/
+		//	      			 6 - - 7	
+		//	4 |   | 2		   /|\
+		//	  | _ |		   11 / | \ 13		. 14
+		//	    3			    12
+		//
+		// Bit 14 is the period, but this is set with parameter 3
+		// Nb. Bit 15 is not read by the display
+        // 
+		// Parameters:
+		// 1. Integer index indicating the display character to write to; default: 0 (left-most)
+		// 2. '16-bit' integer value for the LED segments to illuminate; default: 0xFFFF (all on)
+		// 3. Boolean value specifying whether the decimal poing is lit; default: false		
+		
+		// Bail on incorrect row numbers or character values
+		
+		if (rowNumber < 0 || rowNumber > 3) return
+		if (charValue < 0 || charValue > 0xFFFF) return
+		
+		// Write the character to the _buffer[]
+		
+		if (hasDot) char_value = charValue | HT16K33_DP_VALUE
+		_buffer[rowNumber] = charValue
+	}
+    
+	function writeNumber(rowNumber = 0, integerValue = 0, hasDot = false)
+	{
+		// Puts the number - ie. index of _digits[] - into the specified row, 
+		// adding a decimal point if required
+		//
+		// Parameters:
+		// 1. Integer index indicating the display character to write to; default: 0 (left-most)
+		// 2. Integer value for number to write; default: 0
+		// 3. Boolean value specifying whether the decimal poing is lit; default: false		
+		
+		// Bail on incorrect row numbers or character values
+		
+		if (integerValue < 0 || integerValue > 15) return
+		if (rowNumber < 0 || rowNumber > 3) return
+        
+		setBufferValue(rowNumber, integerValue, hasDot)
+	}
+    
+    function writeLetter(rowNumber = 0, ascii = 65, hasDot = false)
+    {
+    	// Puts the number - ie. index of digits[] - into the specified row, 
+		// adding a decimal point if required
+        //
+		// Parameters:
+		// 1. Integer index indicating the display character to write to; default: 0 (left-most)
+		// 2. Integer Ascii value for character to write; default: A
+		// 3. Boolean value specifying whether the decimal poing is lit; default: false
+		
+        // Bail on incorrect row number
+        
+        if (rowNumber < 0 || rowNumber > 3) return
+        
+        local integerValue = 0
+        
+        if (ascii > 31 && ascii < 48) integerValue = ascii + 30
+        if (ascii > 47 && ascii < 58) integerValue = ascii - 48
+        if (ascii > 64 && ascii < 91) integerValue = ascii - 55
+        if (ascii > 96 && ascii < 123) integerValue = ascii - 61
+        
+		setBufferValue(rowNumber, integerValue, hasDot)
+	}
+	
+	function setBufferValue(rowNumber, integerValue, hasDot)
+	{
+		// Sets a _buffer[] entry to the character stored in _digits[]
+		
+		if (hasDot)
+		{
+			_buffer[rowNumber] = _digits[integerValue] | HT16K33_DP_VALUE
+		}
+		else
+		{
+			_buffer[rowNumber] = _digits[integerValue]
+		}
+	}
+	
+
+    
+	function updateDisplay()
+	{
+		// Converts the row-indexed buffer[] values into a single, combined
+		// string and writes it to the HT16K33 via I2C
+        
+		local data_string = HT16K33_DISPLAY_ADDRESS
+        
+		for (local i = 0 ; i < 4 ; i++)
+		{
+			// Convert 16-bit character data into two 8-bit values for transmission
+			
+			local upperByte = _buffer[i]
+			upperByte =  upperByte >> 8
+			local lowerByte = _buffer[i]
+			lowerByte = lowerByte & 0x00FF
+			
+			data_string = data_string + lowerByte.tochar() + upperByte.tochar() 
+		}
+        
+		// Write the combined datastring to I2C
+        
+        _led.write(_led_i2c_address, data_string)
+	}
+    
+	function setBrightness(brightness = 15)
+	{
+		// This function is called when the app changes the clock's brightness
+		// Default: 15
+        
+		if (brightness > 15) brightness = 15
+		if (brightness < 0) brightness = 0
+        
+		brightness = brightness + 224
+        
+		// Wipe the display completely first, but retain its current contents
+		
+		local sbuffer = [0, 0, 0, 0]
+		
+		foreach (index, value in _buffer)
+		{
+		    sbuffer[index] = _buffer[index]
+		}
+        
+        // Clear the display
+        
+		clearBuffer(HT16K33_BLANK_CHAR)
+		updateDisplay()
+        
+		// Power cycle the display
+        
+		powerDown()
+		powerUp()
+        
+        // Write the new brightness value to the HT16K33
+        
+		_led.write(_led_i2c_address, brightness.tochar() + "\x00")
+		
+		// Restore the character buffer
+		
+        foreach (index, value in sbuffer)
+		{
+		    _buffer[index] = sbuffer[index]
+		}
+        
+        // And display the original contents
+        
+        updateDisplay()
+	}
+    
+	function powerDown()
+	{
+		_led.write(_led_i2c_address, HT16K33_REGISTER_DISPLAY_OFF);
+		_led.write(_led_i2c_address, HT16K33_REGISTER_SYSTEM_OFF);
+	}
+    
+	function powerUp()
+	{
+		_led.write(_led_i2c_address, HT16K33_REGISTER_SYSTEM_ON);
+		_led.write(_led_i2c_address, HT16K33_REGISTER_DISPLAY_ON);
+	}
+
+    function writeLetters(val) {
+         for(local i=0;i<4;i++) {
+             writeLetter(i,val[i])
+        }
+    }
+    function setSomeBrightness(brightness) {
+        brightness=brightness+224;
+    	_led.write(_led_i2c_address, brightness.tochar() + "\x00")
+    }
+
+}
+
+imp.setpowersave(false)  //true for prod
+local d=HT16K33QUAD(hardware.i2c89)
+d.init()
+d.powerUp()
+d.setBrightness(BRIGHTNESS_NORM)
+
+function showText(txt) {
+ //server.log("txt "+txt)
+  d.clearBuffer()
+  local to=4;
+    if (txt.len()<4)
+        to=txt.len()
+        
+  local msg=txt.slice(0,to)  
+  for(local i=0;i<msg.len();i++) {
+      d.writeLetter(i,msg[i])
+  }
+  d.updateDisplay()
+}
+
+
+function scroll(thTxt) {
+// server.log("scroll "+thTxt)
+ if (thTxt.len()<=4) {
+     showText(thTxt)
+ } else {
+     thTxt="  "+thTxt+"    "
+     local end=thTxt.len()
+     for(local i=0; i<=end-4;i++) {
+         showText(thTxt.slice(i,i+4))
+         imp.sleep(0.2)
+     }
+ }
+}
+
+function rot() {
+    local vals=[0x0900<<1,0x0600<<1,0x0060<<1,0x1080<<1]
+    for(local  i=0; i<4; i++) {
+        for (local  j=0; j<4; j++) {
+            d.writeChar(j,vals[i])
+        }
+        d.updateDisplay()
+        imp.sleep(0.05)
+    }
+     for (local  j=0; j<4; j++) {
+            d.writeChar(j,0xffff)
+        }
+        d.updateDisplay()
+}
+
+
+
+for(local m=0;m<5;m++) {
+  rot()
+}
+
+d.clearBuffer()
+d.updateDisplay()
+
+lastNodes <- 0
+
+function toggleDot() {
+    local val =_buffer[3]
+    local res=1
+    if ((val | 0x4000) > 0) { //visible
+        res=val ^ 0x4000
+    } else  {  //not visible
+        res=val | 0x4000
+    }
+    _buffer[3]=res
+     d.updateDisplay()
+}
+ 
+ function triggerNodeUpdate() {
+    agent.send("doNodeUpdate",0)
+    imp.wakeup(UPDATE_SEC,triggerNodeUpdate)
+} 
+
+function getFnord() {
+    local rand=1.0*math.rand()/RAND_MAX
+    if (rand<fnordrate) {
+       local num=((1.0*math.rand()/RAND_MAX)*fnords.len()).tointeger()
+       return fnords[num]
+    } else
+      return notfnord
+}
+ 
+function flipDisplay() {
+     scroll(getFnord())
+      imp.sleep(1)
+    if (displayNodes) {
+      showText("Node")
+      imp.sleep(1)
+      showText(nodesTxt)
+    } else {
+      showText("User")
+      imp.sleep(1)
+      showText(clientsTxt)
+    }
+    toggleDot()
+    displayNodes = !displayNodes
+    imp.wakeup(DISPLAY_FLIP_SEC,flipDisplay)
+}
+ 
+agent.on("txt",scroll)
+agent.on("nodeNum",function(txtNodes) 
+  { 
+      local vals=split(txtNodes,",")
+      nodesTxt=vals[0]
+      clientsTxt=vals[1]
+  })
+  
+
+triggerNodeUpdate()
+flipDisplay()
+
