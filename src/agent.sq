@@ -2,13 +2,13 @@ server.log("text: " + http.agenturl() + "?txt=clients,nodes")
  
 
  function nodeUpdate(noppes) {
-        
-    local incomingDataTable = http.get("https://freifunk-muensterland.de:8443/render?target=nodes.total.count&format=json&from=-10min&maxDataPoints=1").sendsync()
+         
+    local incomingDataTable = http.get("https://graphite.freifunk-muensterland.de/render?target=sum(nodes.dom*.total.count)&format=json&from=-10min&maxDataPoints=1").sendsync()
     
     local parsed_json = http.jsondecode(incomingDataTable.body)
     local nodes=parsed_json[0].datapoints[0][0];
     
-     incomingDataTable = http.get("https://freifunk-muensterland.de:8443/render?target=nodes.totalclient.count&format=json&from=-10min&maxDataPoints=1").sendsync()
+     incomingDataTable = http.get("https://graphite.freifunk-muensterland.de/render?target=sum(nodes.dom*.totalclient.count)&format=json&from=-10min&maxDataPoints=1").sendsync()
     
      parsed_json = http.jsondecode(incomingDataTable.body)
      local clients=parsed_json[0].datapoints[0][0];
@@ -24,7 +24,7 @@ function requestHandler(request, response) {
   try {
     // check if the user sent led as a query parameter
     if ("txt" in request.query) {
-        device.send("nodeNum",request.query.txt); 
+        device.send("txt",request.query.txt); 
       } 
     //device.send("nodeNum",theText)
     // send a response back saying everything was OK.
