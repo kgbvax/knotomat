@@ -3,12 +3,12 @@ server.log("text: " + http.agenturl() + "?txt=clients,nodes")
 
  function nodeUpdate(noppes) {
          
-    local incomingDataTable = http.get("https://graphite.freifunk-muensterland.de/render?target=sum(nodes.dom*.total.count)&format=json&from=-10min&maxDataPoints=1").sendsync()
+    local incomingDataTable = http.get("https://graphite.freifunk-muensterland.de/render?target=sum(nodes.*.nodes_count.nodes_online)&format=json&from=-10min&maxDataPoints=1").sendsync()
     
     local parsed_json = http.jsondecode(incomingDataTable.body)
     local nodes=parsed_json[0].datapoints[0][0];
     
-     incomingDataTable = http.get("https://graphite.freifunk-muensterland.de/render?target=sum(nodes.dom*.totalclient.count)&format=json&from=-10min&maxDataPoints=1").sendsync()
+     incomingDataTable = http.get("https://graphite.freifunk-muensterland.de/render?target=sum(nodes.*.clients_online.total)&format=json&from=-10min&maxDataPoints=1").sendsync()
     
      parsed_json = http.jsondecode(incomingDataTable.body)
      local clients=parsed_json[0].datapoints[0][0];
